@@ -1,19 +1,24 @@
-Here's a `README.md` file that follows the format you requested. You can customize it further based on the specifics of your project.
-
----
-
-# Project Name
+# RADI-PR: Integrating Retrieval Augmentation and Decoding Intervention for Automatic Program Repair
 
 ## Requirements
 
 - Python 3.8
 - See `requirements.txt` for additional dependencies.
 
+## Overview
+
+This repository implements **RADI-PR**, a novel method proposed in the paper "Retrieval-Augmented Decoding Intervention for Automatic Program Repair (RADI-PR)." The method integrates retrieval augmentation, decoding intervention, and transfer learning to improve the accuracy, reliability, and cross-language repair performance of program repair tasks. 
+
+### Key Components:
+- **Retrieval Database Generation**: The database is constructed via `generate_strategies.py`, where repair strategies are extracted and stored.
+- **Vectorization and Knowledge Transfer**: The vectorization of strategies and knowledge transfer across languages is handled by `vectorized.py`.
+- **Model Loading**: Pre-trained models are loaded from Hugging Face, and paths need to be adjusted in `RADI-PR.py`.
+
 ## Model Loading
 
-Models should be trained and saved before loading. You can follow a similar approach as shown in `run_model.py`.
+Models should be trained and saved before loading. You can follow the approach shown in `run_model.py` for training and saving the models.
 
-### Loading Trained Models
+### Loading Pre-trained Models
 
 To load the pre-trained models:
 
@@ -29,14 +34,14 @@ tokenizer = RobertaTokenizerFast.from_pretrained(tokenizer_path)
 
 ### Modifying the Tokenizer
 
-For custom token representations (such as for command sequences), you will need to add special tokens to the tokenizer's vocabulary.
+For command sequence representation, you will need to add special tokens to the tokenizer's vocabulary:
 
 ```python
 # Add custom tokens to the tokenizer
 tokenizer.add_tokens(['</[DEL]/>', '</[INS]/>', '</[LOC]/>'])
 ```
 
-Make sure that your model is resized to accommodate the new tokens:
+Ensure that your model is resized to accommodate these new tokens:
 
 ```python
 model.resize_token_embeddings(len(tokenizer))
@@ -44,31 +49,38 @@ model.resize_token_embeddings(len(tokenizer))
 
 ## Dataset Preparation
 
-Make sure to prepare your dataset in the appropriate format. The dataset should be split into training, validation, and test sets.
+Prepare your dataset in the following format:
 
-For each pair of buggy and fixed code, label the buggy lines with `<BUGS>` and `<BUGE>`, and the corresponding fixed lines with `<FIXS>` and `<FIXE>`. The labeled sequences will then be tokenized using the tokenizer.
+1. **Training Set**: Split into training, validation, and test sets.
+2. **Buggy and Fixed Code**: Each buggy code sequence should be labeled with `<BUGS>` and `<BUGE>`, and the corresponding fixed code should be labeled with `<FIXS>` and `<FIXE>`.
 
 ### Example Dataset Format
 
-- **Input** (buggy code): 
-    ```
+- **Input** (Buggy code): 
+    ```python
     def add_numbers(a, b): <BUGS>if a = b<BUGE>: return a + b
     ```
 
-- **Target** (fixed code):
-    ```
+- **Target** (Fixed code):
+    ```python
     def add_numbers(a, b): <FIXS>if a == b<FIXE>: return a + b
     ```
 
+## Database Construction
+
+The retrieval database is constructed using the script `generate_strategies.py`. This script processes your dataset to generate repair strategies by labeling buggy and fixed code sequences. The resulting repair strategies are stored in a file that will be used for retrieval during inference.
+
+## Vectorization and Knowledge Transfer
+
+Once the strategies are generated, they are vectorized and knowledge transfer is applied using `vectorized.py`. This process involves converting the repair strategies into tokenized vectors, making them compatible with the model, and enabling cross-language repair by abstracting syntax differences between languages.
+
 ## Training
 
-Once your data is ready and models are loaded, you can train the model. Ensure that you have a valid training loop set up in your training script (e.g., `train_model.py`). 
-
-The basic training loop should use a suitable loss function, optimizer, and possibly some regularization methods to improve the model’s performance.
+Once your data is ready and the models are loaded, you can proceed with training. Ensure you have a valid training loop set up in your training script (e.g., `train_model.py`). The basic training loop should utilize a suitable loss function, optimizer, and potentially regularization methods.
 
 ## Inference
 
-To use the trained model for inference:
+To use the trained model for inference, you can follow this example:
 
 ```python
 # Set the model in evaluation mode
@@ -82,10 +94,11 @@ output = model.generate(input_ids)
 predicted_code = tokenizer.decode(output[0], skip_special_tokens=True)
 ```
 
+## Notes
+
+- **Model and Tokenizer Files**: The model and tokenizer files must be downloaded from Hugging Face. Make sure to update the paths in `RADI-PR.py` to reflect the location of these files on your machine.
+- **Retrieval Database**: The retrieval database used for the patch generation should be created and updated regularly to ensure high-quality repair suggestions.
+
 ## Contribution
 
-We welcome contributions to improve this project! Please feel free to open issues or submit pull requests. When contributing, ensure your code follows the existing style and passes the test suite.
-
----
-
-Feel free to modify sections as needed based on the actual details of your project.
+We welcome contributions to improve this project! Feel free to open issues or submit pull requests. When contributing, ensure your code adheres to the existing style and passes the test suite.
