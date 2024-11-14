@@ -32,21 +32,6 @@ model = T5ForConditionalGeneration.from_pretrained(model_path)
 tokenizer = RobertaTokenizerFast.from_pretrained(tokenizer_path)
 ```
 
-### Modifying the Tokenizer
-
-For command sequence representation, you will need to add special tokens to the tokenizer's vocabulary:
-
-```python
-# Add custom tokens to the tokenizer
-tokenizer.add_tokens(['</[DEL]/>', '</[INS]/>', '</[LOC]/>'])
-```
-
-Ensure that your model is resized to accommodate these new tokens:
-
-```python
-model.resize_token_embeddings(len(tokenizer))
-```
-
 ## Dataset Preparation
 
 Prepare your dataset in the following format:
