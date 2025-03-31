@@ -11,7 +11,7 @@ This repository implements **RADI-PR**, a novel method proposed in the paper "Re
 
 ### Key Components:
 - **Retrieval Database Generation**: The database is constructed via `generate_strategies.py`, where repair strategies are extracted and stored.
-- **Vectorization and Knowledge Transfer**: The vectorization of strategies and knowledge transfer across languages is handled by `vectorized.py`.
+- **Vectorization**: Strategies are vectorized for compatibility with the model using `vectorized.py`.
 - **Model Loading**: Pre-trained models are loaded from Hugging Face, and paths need to be adjusted in `RADI-PR.py`.
 
 ## Model Loading
@@ -55,9 +55,9 @@ Prepare your dataset in the following format:
 
 The retrieval database is constructed using the script `generate_strategies.py`. This script processes your dataset to generate repair strategies by labeling buggy and fixed code sequences. The resulting repair strategies are stored in a file that will be used for retrieval during inference.
 
-## Vectorization and Knowledge Transfer
+## Vectorization
 
-Once the strategies are generated, they are vectorized and knowledge transfer is applied using `vectorized.py`. This process involves converting the repair strategies into tokenized vectors, making them compatible with the model, and enabling cross-language repair by abstracting syntax differences between languages.
+Once the strategies are generated, they are vectorized using `vectorized.py`. This process converts the repair strategies into tokenized vectors compatible with the model, serving as input for retrieval augmentation and decoding intervention during repair.
 
 ## Training
 
