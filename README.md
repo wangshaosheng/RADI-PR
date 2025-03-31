@@ -68,15 +68,23 @@ Once your data is ready and the models are loaded, you can proceed with training
 To use the trained model for inference, you can follow this example:
 
 ```python
-# Set the model in evaluation mode
+# Set the model to evaluation mode
 model.eval()
 
-# Encode the input sequence and generate predictions
-input_ids = tokenizer.encode("Add two numbers", return_tensors='pt')
+# Buggy code with bug tags
+buggy_code = "def add(a, b): <BUGS>return a +<BUGE> b"
+
+# Encode the buggy input
+input_ids = tokenizer.encode(buggy_code, return_tensors='pt')
+
+# Generate the fixed code
 output = model.generate(input_ids)
 
-# Decode the generated tokens back to text
+# Decode the prediction
 predicted_code = tokenizer.decode(output[0], skip_special_tokens=True)
+
+# Print the result
+print("Fixed code:", predicted_code)
 ```
 
 ## Notes
