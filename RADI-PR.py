@@ -49,7 +49,10 @@ from peft import (get_peft_config,
                   PromptTuningInit,
                   PrefixTuningConfig,
                   IA3Config)
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchmetrics import Precision, Recall, F1Score, AUROC
 
 class Args(Namespace):
     max_epochs: int
@@ -99,16 +102,16 @@ arg_parser.add_argument(
          'Input folder should contain .train, .valid and .test files of corresponding data.'
 )
 arg_parser.add_argument(
-    '-X', '--experiment', type=str, choices=['t5', 'codet5', 'graph', 'llama'], required=True,
+    '-X', '--experiment', type=str, choices=['t5', 'codet5'], required=True,
     help='Experiment configuration.'
          'Option t5 defines the experiments on t5-base pretrained model, '
          'while codet5 will use Salesforce/codet5-base. '
          'Graph is based on a composite model described in the paper.')
 arg_parser.add_argument(
-    '-r', '--representation', type=str, choices=['text', 'cmdseqtoken', 'graphtext'], required=True,
+    '-r', '--representation', type=str, choices=['text'], required=True,
     help='Data representation that will be used during training.')
 arg_parser.add_argument(
-    '-T', '--task', type=str, choices=['ILPR', 'CLPR'], required=True,
+    '-T', '--task', default='ILPR', type=str, choices=['ILPR', 'CLPR'], required=False,
     help='Task configuration. '
          'Option ILPR defines the task for Intra-Language Program Repair, '
          'while CLPR refers to Continual Cross-Language Program Repair.')
@@ -204,163 +207,6 @@ arg_parser.add_argument(
 
 
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class RankingCrossEntropyLoss(nn.Module):
-    def __init__(self, margin=0.001, weight=None, size_average=None, ignore_index=-100, reduce=None, reduction='mean', max_margin_loss=1.0):
-        super().__init__()
-        self.margin = margin
-        self.ignore_index = ignore_index
-        self.max_margin_loss = max_margin_loss
-        self.cross_entropy_loss = nn.CrossEntropyLoss(weight=weight, size_average=size_average,
-                                                      ignore_index=ignore_index, reduce=reduce, reduction=reduction)
-
-    def forward(self, logits, targets):
-        # 交叉熵损失
-        ce_loss = self.cross_entropy_loss(logits.transpose(1, 2).reshape(-1, logits.size(1)), targets.view(-1))
-
-        # 创建mask
-        mask = (targets != self.ignore_index).unsqueeze(1).expand(-1, logits.size(1), -1)
-        masked_logits = logits * mask.float()
-        
-        # 防止除以零
-        epsilon = 1e-8
-        masked_logits = masked_logits + epsilon
-        
-        # 选择正确类别的logits
-        masked_correct_logits = masked_logits.gather(1, targets.unsqueeze(1)).squeeze(1)
-
-        # 计算排序损失
-        mean_logits = masked_logits.sum(dim=1) / (mask.sum(dim=1) + epsilon)
-        raw_margin_loss = self.margin - (masked_correct_logits - mean_logits)
-        
-        # 平滑处理：使用Huber损失代替ReLU
-        margin_loss = F.smooth_l1_loss(raw_margin_loss, torch.zeros_like(raw_margin_loss), reduction='mean')
-
-        # 限制损失值
-        margin_loss = torch.clamp(margin_loss, 0, self.max_margin_loss)
-
-        # 结合两种损失
-        combined_loss = ce_loss + margin_loss
-
-        return combined_loss
-
-class CombinedLoss(nn.Module):
-    def __init__(self, margin=2.5, ignore_index=-100, max_margin_loss=10.0):
-        super().__init__()
-        self.margin = margin
-        self.ignore_index = ignore_index
-        self.max_margin_loss = max_margin_loss
-        self.ce_loss = nn.CrossEntropyLoss(ignore_index=ignore_index)
-
-    def forward(self, logits, labels):
-        # 计算交叉熵损失
-        ce_loss = self.ce_loss(logits.transpose(1, 2).reshape(-1, logits.size(1)), labels.view(-1))
-
-        # 创建一个mask，忽略ignore_index对应的位置
-        mask = (labels != self.ignore_index).unsqueeze(2).expand_as(logits.transpose(1, 2))
-
-        # 计算排列边际损失
-        batch_size, vocab_size, seq_len = logits.size()
-        logits = logits.transpose(1, 2)  # 将形状调整为 [batch_size, sequence_length, vocab_size]
-
-        # 展平labels以用于gather
-        flat_labels = labels.view(-1, 1)
-
-        # 得到每个正确标签的logits，并应用mask
-        correct_logits = logits.reshape(-1, vocab_size).gather(1, flat_labels).view(batch_size, seq_len)
-        correct_logits = correct_logits.unsqueeze(2) * mask
-
-        # 应用mask到logits
-        masked_logits = logits * mask
-
-        # 排列边际损失的计算
-        pairwise_margin_loss = F.relu(self.margin + masked_logits - correct_logits).sum(dim=2).mean()
-        
-        # 限制排列边际损失的值
-        pairwise_margin_loss = torch.clamp(pairwise_margin_loss, max=self.max_margin_loss)
-
-        # 组合两个损失
-        combined_loss = ce_loss + pairwise_margin_loss
-
-        return combined_loss
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-# class CLPRLoss(nn.Module):
-#     def __init__(self, lambda_1=1.0, lambda_2=1.0, lambda_3=1.0, lambda_4=1.0, ignore_index=-100, reduction='mean'):
-#         super(CLPRLoss, self).__init__()
-#         self.lambda_1 = lambda_1
-#         self.lambda_2 = lambda_2
-#         self.lambda_3 = lambda_3
-#         self.lambda_4 = lambda_4
-#         self.ignore_index = ignore_index
-#         self.reduction = reduction
-        
-#         # define CrossEntropyLoss
-#         self.ce_loss = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction=reduction)
-
-#     def source_cross_entropy_loss(self, logits, targets):
-#         """
-#         Calculate the cross entropy loss of the source language
-#         """
-#         # 交叉熵损失
-#         return self.ce_loss(logits.transpose(1, 2).reshape(-1, logits.size(1)), targets.view(-1))
-
-#     def domain_adaptation_loss(self, domain_logits, domain_labels):
-#         """
-#         Computing domain adaptation loss
-#         """
-#         domain_loss = F.binary_cross_entropy_with_logits(domain_logits, domain_labels.float())
-#         return domain_loss
-
-#     def target_entropy_loss(self, target_prob):
-#         """
-#         Calculate the entropy loss of the target language
-#         """
-#         # 计算目标语言的熵
-#         entropy_loss = -(target_prob * target_prob.log()).sum(dim=-1).mean()
-#         return entropy_loss
-
-#     def forward(self, logits, targets, domain_logits=None, domain_labels=None, target_prob=None):
-#         """
-#         Calculate the final weighted loss
-#         """
-#         # 1. 计算源语言交叉熵损失
-#         source_loss = self.source_cross_entropy_loss(logits, targets)
-
-#         # 2. 计算领域适配损失（如果提供了领域分类器输出）
-#         domain_loss = 0
-#         if domain_logits is not None and domain_labels is not None:
-#             domain_loss = self.domain_adaptation_loss(domain_logits, domain_labels)
-
-#         # 3. 计算目标语言的熵损失（如果提供了目标语言的概率分布）
-#         target_loss = 0
-#         if target_prob is not None:
-#             target_loss = self.target_entropy_loss(target_prob)
-
-#         # 4. 计算信心损失（这里可以是 confidence 相关的损失函数，根据需要进行调整）
-#         # 我们假设这个损失是与 confidence 直接相关的损失
-#         confidence_loss = 0
-#         # confidence_loss 的计算方式可以根据需要修改
-
-#         # 计算总损失
-#         total_loss = (self.lambda_1 * source_loss + 
-#                       self.lambda_2 * domain_loss + 
-#                       self.lambda_3 * target_loss + 
-#                       self.lambda_4 * confidence_loss)
-
-#         return total_loss
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 class CLPRLoss(nn.Module):
     def __init__(self, lambda_1=1.0, lambda_2=1.0, lambda_3=1.0, lambda_4=1.0, ignore_index=-100, reduction='mean'):
         super(CLPRLoss, self).__init__()
@@ -371,32 +217,32 @@ class CLPRLoss(nn.Module):
         self.ignore_index = ignore_index
         self.reduction = reduction
         
-        # 定义 CrossEntropyLoss
+        # Define CrossEntropyLoss
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction=reduction)
 
     def source_cross_entropy_loss(self, logits, targets):
         """
-        计算源语言的交叉熵损失
+        Calculate the cross-entropy loss for the source language
         """
         return self.ce_loss(logits.transpose(1, 2).reshape(-1, logits.size(1)), targets.view(-1))
 
     def domain_adaptation_loss(self, logits, targets):
         """
-        假设 logits 是源领域的输出，targets 是目标领域的标签
-        计算源领域与目标领域之间的适配损失
+        Assume logits are the outputs from the source domain, and targets are labels for the target domain.
+        Calculate the adaptation loss between the source and target domains.
         """
         return self.ce_loss(logits.transpose(1, 2).reshape(-1, logits.size(1)), targets.view(-1))
 
     def target_entropy_loss(self, target_prob):
         """
-        计算目标语言的熵损失，鼓励模型对目标语言的预测更有信心
+        Calculate the entropy loss for the target language, encouraging the model to be more confident in its predictions for the target language.
         """
         entropy_loss = -(target_prob * target_prob.log()).sum(dim=-1).mean()
         return entropy_loss
 
     def calculate_confidence(self, logits):
         """
-        计算信心：对每个token应用softmax并选择最大概率值
+        Calculate confidence: apply softmax to each token and select the maximum probability value.
         """
         probabilities = F.softmax(logits, dim=-1)
         confidence, _ = torch.max(probabilities, dim=-1)
@@ -404,39 +250,36 @@ class CLPRLoss(nn.Module):
 
     def confidence_loss(self, confidence, threshold=0.7):
         """
-        计算信心损失，惩罚低于阈值的信心。
+        Calculate confidence loss, penalizing confidence values below the threshold.
         """
         return F.relu(threshold - confidence).mean()
 
     def forward(self, logits, targets, target_prob=None):
         """
-        计算最终的加权损失
+        Calculate the final weighted loss
         """
-        # 1. 计算源语言交叉熵损失
+        # 1. Calculate source language cross-entropy loss
         source_loss = self.source_cross_entropy_loss(logits, targets)
 
-        # 2. 计算领域适配损失
-        domain_loss = 0  # 假设没有领域适配损失
+        # 2. Calculate domain adaptation loss
+        domain_loss = 0  # Assuming no domain adaptation loss
 
-        # 3. 计算目标语言的熵损失（如果提供了目标语言的概率分布）
+        # 3. Calculate target language entropy loss (if target language probability distribution is provided)
         target_loss = 0
         if target_prob is not None:
             target_loss = self.target_entropy_loss(target_prob)
 
-        # 4. 计算信心损失
+        # 4. Calculate confidence loss
         confidence = self.calculate_confidence(logits)
         confidence_loss_value = self.confidence_loss(confidence)
 
-        # 计算总损失
+        # Calculate total loss
         total_loss = (self.lambda_1 * source_loss + 
                       self.lambda_2 * domain_loss + 
                       self.lambda_3 * target_loss + 
                       self.lambda_4 * confidence_loss_value)
 
         return total_loss
-
-
-
 
 
 class LitModule(pl.LightningModule):
@@ -471,10 +314,10 @@ class LitModule(pl.LightningModule):
 
 
         # self.criterion = CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
-        if prog_args.task == 'ILPR':
-            self.criterion = CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
+        if prog_args.task == 'CLPR':
+            self.criterion = CLPRLoss()  
         else:
-            self.criterion = CLPRLoss()  # 你可以替换成其他损失函数
+            self.criterion = CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)  
 
         self.train_accuracy = Accuracy(ignore_index=self.tokenizer.pad_token_id, mdmc_average='global')   # , top_k=2
         self.val_accuracy = Accuracy(ignore_index=self.tokenizer.pad_token_id, mdmc_average='global')
@@ -492,6 +335,23 @@ class LitModule(pl.LightningModule):
         self._test_pred_labels = torch.tensor([], dtype=torch.int32, device='cpu')
         self._test_true_labels = torch.tensor([], dtype=torch.int32, device='cpu')
 
+        num_classes = self.model.config.vocab_size
+        self.train_precision = Precision(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.val_precision = Precision(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.test_precision = Precision(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+
+        self.train_recall = Recall(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.val_recall = Recall(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.test_recall = Recall(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+
+        self.train_f1 = F1Score(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.val_f1 = F1Score(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        self.test_f1 = F1Score(ignore_index=self.tokenizer.pad_token_id, average='macro', num_classes=num_classes, mdmc_reduce="global")
+        
+        self.train_auc = AUROC(num_classes=num_classes, average='macro', multi_class='ovr')
+        self.val_auc = AUROC(num_classes=num_classes, average='macro', multi_class='ovr')
+        self.test_auc = AUROC(num_classes=num_classes, average='macro', multi_class='ovr')
+
         # Load vectorized change information
         with open('vectorized_intervention_strategies.json', 'r') as f:
             self.vectorized_strategies = json.load(f)
@@ -503,20 +363,25 @@ class LitModule(pl.LightningModule):
         return confidence
 
     def retrieve_info(self, src_text):
-        # Retrieve change information based on input sequence
+        """ Get the most relevant matches from vectorized_intervention_strategies.json """
         retrieved_info = []
+
         for key in self.vectorized_strategies:
-            if key in src_text:
+            if key in src_text:  
                 retrieved_info.append(self.vectorized_strategies[key])
+
         if not retrieved_info:
+            # print(f"[WARNING] No retrieved info found for: {src_text}")  # Debug
             return None
 
-        # Convert the retrieved information into tensor
-        input_ids = torch.tensor([info['input_ids'] for info in retrieved_info])
-        attention_masks = torch.tensor([info['attention_mask'] for info in retrieved_info])
-        labels = torch.tensor([info['labels'] for info in retrieved_info])
+        input_ids = [info['input_ids'][0] if isinstance(info['input_ids'], list) and len(info['input_ids']) > 0 else [] for info in retrieved_info]
+        attention_masks = [info['attention_mask'][0] if isinstance(info['attention_mask'], list) and len(info['attention_mask']) > 0 else [] for info in retrieved_info]
+        labels = [info['labels'][0] if isinstance(info['labels'], list) and len(info['labels']) > 0 else [] for info in retrieved_info]
+        input_ids_tensor = torch.tensor(input_ids, dtype=torch.long) if input_ids else torch.empty((0,), dtype=torch.long)
+        attention_masks_tensor = torch.tensor(attention_masks, dtype=torch.long) if attention_masks else torch.empty((0,), dtype=torch.long)
+        labels_tensor = torch.tensor(labels, dtype=torch.long) if labels else torch.empty((0,), dtype=torch.long)
 
-        return input_ids, attention_masks, labels
+        return input_ids_tensor, attention_masks_tensor, labels_tensor
 
 
 
@@ -546,62 +411,6 @@ class LitModule(pl.LightningModule):
 
 
 
-    # def forward_batch(self, batch, step_type: str = None):
-    #     if prog_args.experiment == 't5' or prog_args.experiment == 'codet5':
-    #         src_data, tgt_data, src_data_mask, _ = batch
-
-    #         # Retrieving change information
-    #         retrieved_embeddings = []
-    #         for src in src_data:
-    #             src_text = self.tokenizer.decode(src)
-    #             retrieved_info = self.retrieve_info(src_text)
-    #             if retrieved_info:
-    #                 input_ids, attention_masks, labels = retrieved_info
-    #                 embeddings = self.model.shared(input_ids.to(self.device))
-    #                 retrieved_embeddings.append((embeddings, labels))
-
-    #         model_output = self(
-    #             input_ids=src_data,
-    #             labels=tgt_data,
-    #             attention_mask=src_data_mask
-    #         )
-    #         logits = model_output.logits  
-
-    #         # Calculating model confidence
-    #         confidence = self.calculate_confidence(logits)  
-
-    #         if retrieved_embeddings:
-    #             for embeddings, labels in retrieved_embeddings:
-    #                 # Make sure embeddings and labels have the same shape
-    #                 embeddings = embeddings.squeeze(0)
-    #                 for i in range(labels.size(1)):
-    #                     label = labels[0, i]
-    #                     if label != self.tokenizer.pad_token_id:
-    #                         if confidence < self.confidence_threshold:
-    #                             logits[:, i, :] = embeddings[i, :]
-
-
-    #         logits = logits.transpose(-1, -2)
-    #         loss = self.criterion(logits, tgt_data)
-    #         loss_val = self.train_loss_metric(loss)
-    #         acc_val = self.train_accuracy(logits, tgt_data)
-    #         logits = f.lift_predictions(logits, tgt_data, ignore_index=self.tokenizer.pad_token_id)
-    #         full_acc_val = self.train_full_accuracy(logits, tgt_data)
-
-
-    #         return {
-    #             'logits': model_output.logits,
-    #             'labels': tgt_data,
-    #             'loss': loss,
-    #             'mean_loss': loss_val,
-    #             'accuracy': acc_val,
-    #             'full_accuracy': full_acc_val,
-    #             'step_type': step_type
-    #         }
-
-    #     else:
-    #         raise NotImplementedError()
-
     def forward_batch(self, batch, step_type: str = None):
         if prog_args.experiment == 't5' or prog_args.experiment == 'codet5':
             src_data, tgt_data, src_data_mask, _ = batch
@@ -627,19 +436,17 @@ class LitModule(pl.LightningModule):
             confidence = self.calculate_confidence(logits).detach() 
 
             # Convert confidence tensor to a scalar (mean in this case)
-            confidence_value = confidence.mean()  # Or use .max(), .min(), or .item() depending on your logic
+            confidence_value = confidence.mean()  
 
-            if retrieved_embeddings:
-                for embeddings, labels in retrieved_embeddings:
-                    # Make sure embeddings and labels have the same shape
-                    embeddings = embeddings.squeeze(0)
-                    for i in range(labels.size(1)):
-                        label = labels[0, i]
-                        if label != self.tokenizer.pad_token_id:
-                            if confidence_value < self.confidence_threshold:
-                                logits[:, i, :] = embeddings[i, :]
-                            # Optionally adjust logits based on confidence
-                            logits[:, i, :] *= confidence_value  # Scaling by confidence
+            for i in range(labels.size(1)):
+                label = labels[0, i]
+                if label != self.tokenizer.pad_token_id:
+                    if confidence_value < self.confidence_threshold:
+                        if embeddings.shape[-1] != logits.shape[-1]:
+                            embeddings = torch.nn.Linear(embeddings.shape[-1], logits.shape[-1]).to(embeddings.device)(embeddings)
+
+                        logits[:, i, :embeddings.shape[1]] = embeddings[i, :]
+                    logits[:, i, :] *= confidence_value  
 
             logits = logits.transpose(-1, -2)
 
@@ -652,8 +459,56 @@ class LitModule(pl.LightningModule):
 
             loss_val = self.train_loss_metric(loss)
             acc_val = self.train_accuracy(logits, tgt_data)
+
+            
+            logits = logits.transpose(-1, -2)  
+            preds = torch.argmax(logits, dim=-1) 
+            tgt_data = tgt_data.long()
+            assert preds.shape == tgt_data.shape, f"Shape mismatch: preds {preds.shape}, tgt_data {tgt_data.shape}"
+            # ** Precision, Recall, F1**
+            precision_val = self.train_precision(preds, tgt_data)
+            recall_val = self.train_recall(preds, tgt_data)
+            f1_val = self.train_f1(preds, tgt_data)
+    
+            self.log("train_loss", loss_val, prog_bar=True)
+            self.log("train_accuracy", acc_val, prog_bar=True)
+            self.log("train_precision", precision_val, prog_bar=True)
+            self.log("train_recall", recall_val, prog_bar=True)
+            self.log("train_f1", f1_val, prog_bar=True)
+            logits = model_output.logits
+            logits = logits.transpose(-1, -2)
+
+            best_perplexity = float('inf')  
+            best_cosine_similarity = -float('inf')  
+            best_mse_score = float('inf')  
+
+            perplexity = torch.exp(loss / 8)  
+            if perplexity.item() < best_perplexity:
+                best_perplexity = perplexity.item()
+            logits_probs = F.softmax(logits, dim=1)  # [batch_size, vocab_size, sequence_length]
+            predicted_indices = torch.argmax(logits_probs, dim=1)  # [batch_size, sequence_length]
+            tgt_data = torch.clamp(tgt_data, max=logits.size(1) - 1)  
+            tgt_one_hot = F.one_hot(tgt_data, num_classes=logits.size(1)).float() 
+            mask = tgt_data != self.tokenizer.pad_token_id  
+            pred_one_hot = F.one_hot(predicted_indices, num_classes=logits.size(1)).float()
+            pred_one_hot_flat = pred_one_hot.view(-1, pred_one_hot.size(2))  # [batch_size * sequence_length, vocab_size]
+            tgt_one_hot_flat = tgt_one_hot.view(-1, tgt_one_hot.size(2))  # [batch_size * sequence_length, vocab_size]
+            pred_one_hot_flat = pred_one_hot_flat[mask.view(-1)]  
+            tgt_one_hot_flat = tgt_one_hot_flat[mask.view(-1)]  
+            cosine_similarity = F.cosine_similarity(pred_one_hot_flat, tgt_one_hot_flat, dim=-1)
+            similarity_score = cosine_similarity.mean()
+            if similarity_score.item() > best_cosine_similarity:
+                best_cosine_similarity = similarity_score.item()
+            mse_score = F.mse_loss(pred_one_hot_flat, tgt_one_hot_flat)
+            if mse_score.item() < best_mse_score:
+                best_mse_score = mse_score.item()
+            self.log("Perplexity: ", best_perplexity, prog_bar=True)
+            self.log("Cosine Similarity:", best_cosine_similarity, prog_bar=True)
+            self.log("MSE Score:", best_mse_score, prog_bar=True)
+
             logits = f.lift_predictions(logits, tgt_data, ignore_index=self.tokenizer.pad_token_id)
             full_acc_val = self.train_full_accuracy(logits, tgt_data)
+
 
             return {
                 'logits': model_output.logits,
@@ -661,6 +516,9 @@ class LitModule(pl.LightningModule):
                 'loss': loss,
                 'mean_loss': loss_val,
                 'accuracy': acc_val,
+                'precision': precision_val,  
+                'recall': recall_val, 
+                'f1': f1_val,  
                 'full_accuracy': full_acc_val,
                 'step_type': step_type
             }
@@ -711,10 +569,6 @@ class LitModule(pl.LightningModule):
         y = self.tokenizer(
             y_content, padding='max_length', truncation=True,
             max_length=prog_args.model_max_length, return_tensors='pt')
-
-        # # data augmentation
-        # preprocessor = DataPreprocessor(tokenizer=self.tokenizer, augment=True, max_length=prog_args.model_max_length)
-        # x, y = preprocessor.preprocess_data(x, y)
 
         loader = DataLoader(
             BatchEncodingDataset(x, y),
@@ -837,4 +691,4 @@ if __name__ == '__main__':
     else:
         arg_parser.print_help()
 
-# python RADI-PR.py -i cr3/ -X t5 -r text -E 1 -tcD model_t5/t5-base/ -mcD model_t5/ --devices 5 -T ILPR
+# python RADI-PR.py -i cr/ -X t5 -r text -E 1 -tcD model_t5/t5-base/ -mcD model_t5/ --devices 0
