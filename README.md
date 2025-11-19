@@ -7,7 +7,7 @@
 
 ## Overview
 
-This repository implements **RADI-PR**, a novel method proposed in the paper "Retrieval-Augmented Decoding Intervention for Automatic Program Repair (RADI-PR)." The method integrates retrieval augmentation, decoding intervention, and transfer learning to improve the accuracy, reliability, and cross-language repair performance of program repair tasks. 
+This repository implements **RADI-PR**, a novel method proposed in the paper "Integrating Retrieval Augmentation and Decoding Intervention for Automatic Program Repair (RADI-PR)." The method integrates retrieval augmentation, decoding intervention, and transfer learning to improve the accuracy, reliability, and cross-language repair performance of program repair tasks. 
 
 ### Key Components:
 - **Retrieval Database Generation**: The database is constructed via `generate_strategies.py`, where repair strategies are extracted and stored.
