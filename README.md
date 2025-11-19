@@ -38,8 +38,8 @@ Preprocessing Steps Used in RADI-PR (for Reproducibility)
 
 All preprocessing steps used to construct the retrieval database are fully deterministic:
 1.	For each bug–fix pair, we extract the modified line(s) from the diff.
-2.	In the buggy code, the modified region is wrapped with <BUGS> and <BUGE>.
-3.	In the fixed code, the same region is wrapped with <FIXS> and <FIXE>.
+2.	In the buggy code, the modified region is wrapped with `<BUGS>` and `<BUGE>`.
+3.	In the fixed code, the same region is wrapped with `<FIXS>` and `<FIXE>`.
 4.	Both buggy and fixed sequences are then abstracted using the mapping rules in the paper (variable → VAR_1, method → METHOD_1, etc.).
 5.	The abstracted sequences are stored in JSON format and used to build the retrieval database.
 
