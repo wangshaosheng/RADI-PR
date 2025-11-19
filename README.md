@@ -39,6 +39,12 @@ Prepare your dataset in the following format:
 1. **Training Set**: Split into training, validation, and test sets.
 2. **Buggy and Fixed Code**: Each buggy code sequence should be labeled with `<BUGS>` and `<BUGE>`, and the corresponding fixed code should be labeled with `<FIXS>` and `<FIXE>`.
 
+For reproducibility, the exact retrieval database used in the paper has been included in this repository as
+```
+vectorized_intervention_strategies.json
+```
+This file contains all abstracted buggy–fixed sequences and their vectorized representations, allowing other researchers to fully reproduce our retrieval results without re-running any preprocessing.
+
 ### Example Dataset Format
 
 - **Input** (Buggy code): 
